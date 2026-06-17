@@ -5,6 +5,7 @@
 
 import { ethers } from "ethers";
 import { RiskSnapshot, SuggestedAction, ThreatAssessment } from "./analyzer";
+import { LegacyWalletProvider, TrustWalletAgentKitProvider, WalletProviderInterface } from "./wallet-provider";
 
 export interface ExecutorConfig {
   privateKey: string;
@@ -62,7 +63,16 @@ export class OnChainExecutor {
 
   constructor(config: ExecutorConfig, provider: ethers.JsonRpcProvider) {
     this.config = config;
-    this.wallet = new ethers.Wallet(config.privateKey, provider);
+
+    const twakEnabled = process.env.TWAK_ENABLED === "true";
+    if (twakEnabled) {
+      console.log("Using Trust Wallet Agent Kit");
+      this.wallet = new TrustWalletAgentKitProvider(config.privateKey, provider);
+    } else {
+      console.log("Using Legacy Executor");
+      this.wallet = new LegacyWalletProvider(config.privateKey, provider);
+    }
+
     this.vault = new ethers.Contract(config.vaultAddress, VAULT_ABI, this.wallet);
     this.registry = new ethers.Contract(config.registryAddress, REGISTRY_ABI, this.wallet);
     this.logger = new ethers.Contract(config.loggerAddress, LOGGER_ABI, this.wallet);
@@ -247,6 +257,10 @@ export class OnChainExecutor {
 
   getOperatorAddress(): string {
     return this.wallet.address;
+  }
+
+  getWalletProvider(): WalletProviderInterface {
+    return this.wallet as unknown as WalletProviderInterface;
   }
 }
 

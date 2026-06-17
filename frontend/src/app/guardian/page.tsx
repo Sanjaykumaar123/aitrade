@@ -293,10 +293,16 @@ export default function GuardianShieldPage() {
         {!isConnected && (
           <div className="space-y-10">
             <div className="text-center pt-8 pb-2">
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-medium mb-6"
-                style={{ background: "var(--accent-muted)", border: "1px solid var(--accent-border)", color: "var(--accent)" }}>
-                <Activity className="w-3.5 h-3.5" />
-                AI Wallet Security Scanner
+              <div className="flex flex-wrap items-center justify-center gap-2 mb-6">
+                <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-medium"
+                  style={{ background: "var(--accent-muted)", border: "1px solid var(--accent-border)", color: "var(--accent)" }}>
+                  <Activity className="w-3.5 h-3.5" />
+                  AI Wallet Security Scanner
+                </div>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
+                  style={{ background: "rgba(59,130,246,0.08)", color: "#3b82f6", border: "1px solid rgba(59,130,246,0.15)" }}>
+                  Wallet Provider: {process.env.NEXT_PUBLIC_TWAK_ENABLED === "true" ? "Trust Wallet" : "Legacy"}
+                </div>
               </div>
               <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-white mb-4">
                 Guardian Shield
@@ -419,6 +425,10 @@ export default function GuardianShieldPage() {
                     style={{ background: "rgba(52,211,153,0.08)", color: "var(--green)", border: "1px solid rgba(52,211,153,0.15)" }}>
                     <span className="w-1.5 h-1.5 rounded-full pulse-live" style={{ background: "var(--green)" }} />
                     Live
+                  </div>
+                  <div className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium"
+                    style={{ background: "rgba(59,130,246,0.08)", color: "#3b82f6", border: "1px solid rgba(59,130,246,0.15)" }}>
+                    Wallet Provider: {process.env.NEXT_PUBLIC_TWAK_ENABLED === "true" ? "Trust Wallet" : "Legacy"}
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
