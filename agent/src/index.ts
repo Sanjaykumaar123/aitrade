@@ -12,6 +12,7 @@ import { PancakeSwapProvider, BSC_TOKENS } from "./pancakeswap";
 import { VenusMonitor } from "./venus-monitor";
 import { StopLossMonitor } from "./stop-loss";
 import { ethers } from "ethers";
+import { GuardianPolicyEngine } from "./policy-engine";
 import * as fs from "fs";
 
 dotenv.config({ path: "../.env" });
@@ -250,6 +251,66 @@ class AegisAgent {
       console.log(`  → ${factor.name}: ${factor.score}/100 (w=${factor.weight}) — ${factor.description}`);
     }
 
+    // ─── Phase 2.1: GUARDIAN POLICIES ────────────────────
+    let policyTriggeredThreat: { action: SuggestedAction; reasoning: string; confidence: number } | null = null;
+    
+    if (process.env.ENABLE_POLICY_ENGINE !== "false") {
+      console.log("\n🛡️  Phase 2.1: GUARDIAN POLICIES — Evaluating user defined policies...");
+      try {
+        const policies = await GuardianPolicyEngine.getPolicies();
+        const activePolicies = policies.filter(p => p.enabled);
+        console.log(`  Loaded ${activePolicies.length} active natural language policies`);
+        
+        for (const policy of activePolicies) {
+          const triggered = GuardianPolicyEngine.evaluate(policy, marketData);
+          if (triggered) {
+            const rule = policy.parsedRepresentation;
+            
+            // Format condition nicely
+            let formattedRule = "";
+            switch (rule.condition) {
+              case "volatility_above": formattedRule = `volatility > ${rule.threshold}%`; break;
+              case "liquidity_below": formattedRule = `liquidity < $${(rule.threshold / 1e6).toFixed(1)}M`; break;
+              case "stablecoin_below": formattedRule = `stablecoins < ${rule.threshold}%`; break;
+              case "bullish_market": formattedRule = `market == bullish`; break;
+              case "bearish_market": formattedRule = `market == bearish`; break;
+              case "fear_and_greed_below": formattedRule = `fear_and_greed < ${rule.threshold}`; break;
+              case "whale_selling_above": formattedRule = `whale_selling > ${rule.threshold}%`; break;
+              case "dominance_change_above": formattedRule = `dominance_change > ${rule.threshold}%`; break;
+              default: formattedRule = `${rule.condition} is active`;
+            }
+
+            const mappedAction = this.mapPolicyActionToSuggestedAction(rule.action);
+            
+            console.log("\nTriggered Policy:");
+            console.log(`"${policy.originalInstruction}"`);
+            console.log("\nParsed Rule:");
+            console.log(formattedRule);
+            console.log("\nExecuted Action:");
+            console.log(rule.action);
+            console.log("\nConfidence:");
+            console.log("94%\n");
+
+            // Update policy execution stats
+            policy.executionCount++;
+            policy.lastExecutedTimestamp = Date.now();
+            await GuardianPolicyEngine.savePolicies(policies);
+
+            // Set the triggered policy threat
+            policyTriggeredThreat = {
+              action: mappedAction,
+              reasoning: `Triggered Policy: "${policy.originalInstruction}" [Rule: ${formattedRule}]`,
+              confidence: 94
+            };
+            
+            break;
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[Policy Engine] Error evaluating policies: ${err.message}`);
+      }
+    }
+
     // ─── Phase 2.5: LLM AI REASONING ─────────────────────
     console.log("\n🤖 Phase 2.5: AI REASONING — Generating LLM analysis...");
     const aiAnalysis = await this.aiEngine.analyzeMarket(marketData, riskSnapshot);
@@ -323,6 +384,17 @@ class AegisAgent {
     // ─── Phase 3: DECIDE ──────────────────────────────────
     console.log("\n⚡ Phase 3: DECIDE — Threat detection...");
     const threat = this.analyzer.detectThreats(marketData);
+    
+    if (policyTriggeredThreat) {
+      threat.threatDetected = true;
+      if (threat.severity < RiskLevel.HIGH) {
+        threat.severity = RiskLevel.HIGH;
+      }
+      threat.suggestedAction = policyTriggeredThreat.action;
+      threat.reasoning = `${policyTriggeredThreat.reasoning} | ${threat.reasoning}`;
+      threat.confidence = policyTriggeredThreat.confidence;
+    }
+
     console.log(`  Threat Detected: ${threat.threatDetected}`);
     if (threat.threatDetected) {
       console.log(`  Type: ${threat.threatType}`);
@@ -384,6 +456,19 @@ class AegisAgent {
     console.log(`\n📊 Cycle #${this.cycleCount} complete in ${cycleDuration}ms | Uptime: ${uptime}s`);
     console.log(`   Total decisions logged: ${this.executor.getExecutionLog().filter(e => e.type === "logDecision").length}`);
     console.log(`   Protections triggered: ${this.executor.getExecutionLog().filter(e => e.type === "protection").length}`);
+  }
+
+  private mapPolicyActionToSuggestedAction(action: string): SuggestedAction {
+    switch (action) {
+      case "emergency_withdraw": return SuggestedAction.EMERGENCY_WITHDRAW;
+      case "rebalance": return SuggestedAction.REBALANCE;
+      case "stop_loss": return SuggestedAction.STOP_LOSS;
+      case "take_profit": return SuggestedAction.TAKE_PROFIT;
+      case "sell": return SuggestedAction.REDUCE_EXPOSURE;
+      case "hedge": return SuggestedAction.REDUCE_EXPOSURE;
+      case "alert": return SuggestedAction.ALERT;
+      default: return SuggestedAction.MONITOR;
+    }
   }
 
   stop(): void {

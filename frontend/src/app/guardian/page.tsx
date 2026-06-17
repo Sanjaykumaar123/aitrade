@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useWalletContext } from "../../lib/WalletContext";
 import { CONTRACTS, HOLDER_TIER_BENEFITS } from "../../lib/constants";
 import Link from "next/link";
+import { GuardianPolicy, StructuredRule } from "../../lib/policy-store";
 import {
   AlertTriangle, Skull, CheckCircle, Loader2,
   Wallet, Eye, RefreshCw, ArrowRight,
@@ -167,6 +168,113 @@ export default function GuardianShieldPage() {
   const [tgChatId, setTgChatId] = useState("");
   const [tgConnected, setTgConnected] = useState(false);
   const [tgLoading, setTgLoading] = useState(false);
+
+  // Guardian Policies State
+  const [policies, setPolicies] = useState<GuardianPolicy[]>([]);
+  const [policyInput, setPolicyInput] = useState("");
+  const [previewRule, setPreviewRule] = useState<StructuredRule | null>(null);
+  const [policyLoading, setPolicyLoading] = useState(false);
+
+  const fetchPolicies = useCallback(async () => {
+    try {
+      const res = await fetch("/api/policies");
+      const data = await res.json();
+      if (data.success) {
+        setPolicies(data.policies || []);
+      }
+    } catch (err) {
+      console.error("Error fetching policies", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPolicies();
+  }, [fetchPolicies]);
+
+  const handleCreatePolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!policyInput.trim()) return;
+    setPolicyLoading(true);
+    try {
+      const res = await fetch("/api/policies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: policyInput }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Guardian policy added successfully!");
+        setPolicyInput("");
+        setPreviewRule(null);
+        fetchPolicies();
+      } else {
+        toast.error(data.error || "Failed to create policy");
+      }
+    } catch (err: unknown) {
+      toast.error((err as Error).message || "Failed to create policy");
+    } finally {
+      setPolicyLoading(false);
+    }
+  };
+
+  const handlePreviewPolicy = async () => {
+    if (!policyInput.trim()) return;
+    setPolicyLoading(true);
+    setPreviewRule(null);
+    try {
+      const res = await fetch("/api/policies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: policyInput, previewOnly: true }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPreviewRule(data.rule);
+      } else {
+        toast.error(data.error || "Failed to parse instruction");
+      }
+    } catch (err: unknown) {
+      toast.error((err as Error).message || "Failed to parse instruction");
+    } finally {
+      setPolicyLoading(false);
+    }
+  };
+
+  const handleTogglePolicy = async (id: string, currentEnabled: boolean) => {
+    try {
+      const res = await fetch("/api/policies", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, enabled: !currentEnabled }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Policy ${!currentEnabled ? "enabled" : "disabled"}`);
+        fetchPolicies();
+      } else {
+        toast.error(data.error || "Failed to update policy");
+      }
+    } catch (err: unknown) {
+      toast.error((err as Error).message || "Failed to update policy");
+    }
+  };
+
+  const handleDeletePolicy = async (id: string) => {
+    try {
+      const res = await fetch(`/api/policies?id=${id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Policy deleted");
+        fetchPolicies();
+      } else {
+        toast.error(data.error || "Failed to delete policy");
+      }
+    } catch (err: unknown) {
+      toast.error((err as Error).message || "Failed to delete policy");
+    }
+  };
 
   const scanWallet = useCallback(async (addr: string, silent = false) => {
     if (!silent) setLoading(true);
@@ -803,6 +911,145 @@ export default function GuardianShieldPage() {
                       </p>
                     </div>
                   )}
+                </div>
+
+                {/* Guardian Policies */}
+                <div className="card p-5 space-y-4">
+                  <div className="flex items-center gap-2 pb-2" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                    <Shield className="w-4 h-4 text-emerald-400" />
+                    <span className="text-sm font-semibold text-white">Guardian Policies</span>
+                    <span className="ml-auto text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      AI Parser
+                    </span>
+                  </div>
+
+                  <form onSubmit={handleCreatePolicy} className="space-y-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400">
+                        Define Rule in Natural Language
+                      </label>
+                      <textarea
+                        value={policyInput}
+                        onChange={(e) => setPolicyInput(e.target.value)}
+                        placeholder='e.g., "Protect my portfolio if volatility exceeds 15%."'
+                        rows={2}
+                        className="w-full text-xs px-3 py-2 rounded-lg outline-none resize-none leading-relaxed"
+                        style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)" }}
+                      />
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handlePreviewPolicy}
+                        disabled={policyLoading || !policyInput.trim()}
+                        className="flex-1 px-3 py-2 rounded-lg text-xs font-semibold border border-zinc-700 hover:bg-zinc-800 text-zinc-300 transition-colors disabled:opacity-40"
+                      >
+                        Preview Parse
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={policyLoading || !policyInput.trim()}
+                        className="flex-1 btn-primary py-2 rounded-lg text-xs font-semibold disabled:opacity-40"
+                      >
+                        {policyLoading ? "Saving..." : "Add Policy"}
+                      </button>
+                    </div>
+                  </form>
+
+                  {previewRule && (
+                    <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950/40 space-y-2 text-xs">
+                      <div className="font-semibold text-zinc-400 uppercase tracking-wider text-[9px]">
+                        AI Parser Output:
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5 font-mono text-[11px]">
+                        <span className="text-zinc-500">Action:</span>
+                        <span className="text-zinc-300 font-bold">{previewRule.action}</span>
+                        <span className="text-zinc-500">Condition:</span>
+                        <span className="text-emerald-400 font-bold">{previewRule.condition}</span>
+                        <span className="text-zinc-500">Threshold:</span>
+                        <span className="text-amber-400 font-bold">
+                          {previewRule.condition.includes("liquidity") 
+                            ? `$${(previewRule.threshold / 1e6).toFixed(1)}M` 
+                            : `${previewRule.threshold}${previewRule.condition.includes("market") ? "" : "%"}`}
+                        </span>
+                        <span className="text-zinc-500">Target:</span>
+                        <span className="text-purple-400 font-bold">{previewRule.target}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2.5 pt-2">
+                    <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400">
+                      Active Policies ({policies.length})
+                    </div>
+                    {policies.length === 0 ? (
+                      <div className="text-xs text-zinc-500 py-3 text-center bg-zinc-950/20 rounded-lg border border-dashed border-zinc-800">
+                        No custom policies configured.
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                        {policies.map((policy) => {
+                          const rule = policy.parsedRepresentation;
+                          return (
+                            <div key={policy.id} className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 flex flex-col gap-2 relative">
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="text-xs text-white font-medium leading-normal pr-12">
+                                  &quot;{policy.originalInstruction}&quot;
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeletePolicy(policy.id)}
+                                  className="absolute top-3 right-3 text-zinc-500 hover:text-red-400 p-1 rounded transition-colors"
+                                  title="Delete Policy"
+                                >
+                                  <AlertTriangle className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+
+                              <div className="flex flex-wrap gap-1.5 items-center">
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase">
+                                  {rule.action}
+                                </span>
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+                                  {rule.condition}: {rule.condition.includes("liquidity") ? `$${(rule.threshold / 1e6).toFixed(1)}M` : rule.threshold}
+                                </span>
+                                {policy.executionCount > 0 && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                    Triggered: {policy.executionCount}x
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="flex items-center justify-between pt-1 border-t border-zinc-800/60 mt-1">
+                                <span className="text-[9px] text-zinc-500">
+                                  Created: {new Date(policy.createdTimestamp).toLocaleDateString()}
+                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[9px] text-zinc-400">
+                                    {policy.enabled ? "Enabled" : "Disabled"}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleTogglePolicy(policy.id, policy.enabled)}
+                                    className={`w-7 h-4 rounded-full transition-colors relative flex items-center px-0.5 ${
+                                      policy.enabled ? "bg-emerald-500" : "bg-zinc-700"
+                                    }`}
+                                  >
+                                    <span
+                                      className={`w-3 h-3 rounded-full bg-white shadow-sm transform transition-transform ${
+                                        policy.enabled ? "translate-x-3" : "translate-x-0"
+                                      }`}
+                                    />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Telegram */}
