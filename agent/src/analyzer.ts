@@ -12,6 +12,11 @@ export interface MarketData {
   liquidityChange: number;
   holders: number;
   topHolderPercent: number;
+  marketCap?: number;
+  marketDominance?: number;
+  volatility?: number;
+  fearAndGreed?: number;
+  trending?: boolean;
 }
 
 export interface RiskSnapshot {
