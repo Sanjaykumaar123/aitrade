@@ -13,6 +13,16 @@ import { VenusMonitor } from "./venus-monitor";
 import { StopLossMonitor } from "./stop-loss";
 import { ethers } from "ethers";
 import { GuardianPolicyEngine } from "./policy-engine";
+import { 
+  MarketAgent, 
+  LiquidityAgent, 
+  WhaleAgent, 
+  SentimentAgent, 
+  RiskAgent, 
+  GuardianPolicyAgent, 
+  ExecutionAgent, 
+  SupervisorAgent 
+} from "./multi-agent";
 import * as fs from "fs";
 
 dotenv.config({ path: "../.env" });
@@ -253,12 +263,20 @@ class AegisAgent {
 
     // ─── Phase 2.1: GUARDIAN POLICIES ────────────────────
     let policyTriggeredThreat: { action: SuggestedAction; reasoning: string; confidence: number } | null = null;
+    let allPolicies: any[] = [];
     
     if (process.env.ENABLE_POLICY_ENGINE !== "false") {
+      try {
+        allPolicies = await GuardianPolicyEngine.getPolicies();
+      } catch (err: any) {
+        console.warn(`[Policy Engine] Error loading policies: ${err.message}`);
+      }
+    }
+
+    if (process.env.ENABLE_POLICY_ENGINE !== "false" && process.env.ENABLE_MULTI_AGENT !== "true") {
       console.log("\n🛡️  Phase 2.1: GUARDIAN POLICIES — Evaluating user defined policies...");
       try {
-        const policies = await GuardianPolicyEngine.getPolicies();
-        const activePolicies = policies.filter(p => p.enabled);
+        const activePolicies = allPolicies.filter(p => p.enabled);
         console.log(`  Loaded ${activePolicies.length} active natural language policies`);
         
         for (const policy of activePolicies) {
@@ -294,7 +312,7 @@ class AegisAgent {
             // Update policy execution stats
             policy.executionCount++;
             policy.lastExecutedTimestamp = Date.now();
-            await GuardianPolicyEngine.savePolicies(policies);
+            await GuardianPolicyEngine.savePolicies(allPolicies);
 
             // Set the triggered policy threat
             policyTriggeredThreat = {
@@ -370,12 +388,14 @@ class AegisAgent {
       this.stopLossMonitor.setEntryPrice(addr, currentPrice);
     }
 
+    let isStopLossTriggered = false;
     if (watchedAddresses.length > 0) {
       const slResult = await this.stopLossMonitor.checkAndExecuteAll(watchedAddresses, currentPrice);
       console.log(`  Checked: ${slResult.checked} users`);
       if (slResult.triggered > 0) {
         console.log(`  ⚠️  Stop-loss triggered: ${slResult.triggered} users`);
         console.log(`  Executed: ${slResult.executed} swaps`);
+        isStopLossTriggered = true;
       } else {
         console.log(`  All positions within thresholds ✓`);
       }
@@ -383,16 +403,71 @@ class AegisAgent {
 
     // ─── Phase 3: DECIDE ──────────────────────────────────
     console.log("\n⚡ Phase 3: DECIDE — Threat detection...");
-    const threat = this.analyzer.detectThreats(marketData);
-    
-    if (policyTriggeredThreat) {
-      threat.threatDetected = true;
-      if (threat.severity < RiskLevel.HIGH) {
-        threat.severity = RiskLevel.HIGH;
+    let threat = this.analyzer.detectThreats(marketData);
+    let debugOrchestrationReport = "";
+
+    if (process.env.ENABLE_MULTI_AGENT === "true") {
+      console.log("\n🤝 Running Multi-Agent Orchestration...");
+      // 1. Run Market, Liquidity, Whale, and Sentiment agents in parallel (asynchronously)
+      const [marketOut, liquidityOut, whaleOut, sentimentOut] = await Promise.all([
+        MarketAgent.analyze(marketData),
+        LiquidityAgent.analyze(marketData),
+        WhaleAgent.analyze(marketData),
+        SentimentAgent.analyze(marketData),
+      ]);
+
+      // 2. Run Risk Agent
+      const riskOut = await RiskAgent.analyze(marketData, riskSnapshot, isStopLossTriggered);
+
+      // 3. Run Guardian Policy Agent
+      const policyOut = await GuardianPolicyAgent.analyze(marketData, allPolicies);
+
+      // 4. Run Execution Agent
+      const executionOut = await ExecutionAgent.analyze(
+        policyOut.policyTriggered ? policyOut.action : threat.suggestedAction,
+        process.env.TWAK_ENABLED === "true"
+      );
+
+      // 5. Supervisor orchestrates the final decision
+      const supervisorDecision = SupervisorAgent.orchestrate(
+        marketOut,
+        liquidityOut,
+        whaleOut,
+        sentimentOut,
+        riskOut,
+        policyOut,
+        executionOut,
+        threat
+      );
+
+      // Expose internal reasoning in debug mode or if ENABLE_AGENT_DEBUG === "true"
+      if (process.env.ENABLE_AGENT_DEBUG === "true") {
+        console.log(supervisorDecision.agentReasoningSummary);
       }
-      threat.suggestedAction = policyTriggeredThreat.action;
-      threat.reasoning = `${policyTriggeredThreat.reasoning} | ${threat.reasoning}`;
-      threat.confidence = policyTriggeredThreat.confidence;
+
+      // Map Supervisor decision back to threat
+      threat = {
+        threatDetected: supervisorDecision.threatDetected,
+        threatType: supervisorDecision.threatType,
+        severity: supervisorDecision.severity,
+        confidence: supervisorDecision.confidence,
+        suggestedAction: supervisorDecision.suggestedAction,
+        reasoning: supervisorDecision.reasoning,
+        estimatedImpact: supervisorDecision.estimatedImpact,
+      };
+
+      debugOrchestrationReport = supervisorDecision.agentReasoningSummary;
+    } else {
+      // Legacy Deciding Step
+      if (policyTriggeredThreat) {
+        threat.threatDetected = true;
+        if (threat.severity < RiskLevel.HIGH) {
+          threat.severity = RiskLevel.HIGH;
+        }
+        threat.suggestedAction = policyTriggeredThreat.action;
+        threat.reasoning = `${policyTriggeredThreat.reasoning} | ${threat.reasoning}`;
+        threat.confidence = policyTriggeredThreat.confidence;
+      }
     }
 
     console.log(`  Threat Detected: ${threat.threatDetected}`);
@@ -421,7 +496,9 @@ class AegisAgent {
     // Log decision for the primary watched address
     
     // Hash includes both heuristic reasoning AND LLM analysis for on-chain attestation
-    const combinedReasoning = `${threat.reasoning} | AI: ${aiAnalysis.reasoning}`;
+    const combinedReasoning = debugOrchestrationReport
+      ? `${threat.reasoning} | Orchestration: ${debugOrchestrationReport}`
+      : `${threat.reasoning} | AI: ${aiAnalysis.reasoning}`;
     const reasoningHash = this.analyzer.getReasoningHash(combinedReasoning);
 
     const decisionTx = await this.executor.logDecision(threat, targetUser, reasoningHash);
