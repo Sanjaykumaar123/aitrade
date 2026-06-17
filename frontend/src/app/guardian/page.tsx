@@ -5,6 +5,7 @@ import { useWalletContext } from "../../lib/WalletContext";
 import { CONTRACTS, HOLDER_TIER_BENEFITS } from "../../lib/constants";
 import Link from "next/link";
 import { GuardianPolicy, StructuredRule } from "../../lib/policy-store";
+import { DecisionTimeline } from "../../lib/decision-timeline-store";
 import {
   AlertTriangle, Skull, CheckCircle, Loader2,
   Wallet, Eye, RefreshCw, ArrowRight,
@@ -12,6 +13,7 @@ import {
   Crown, Clock, TrendingUp, Lock,
   Zap, ChevronDown, ChevronUp, Send,
   Target, ShieldAlert, ShieldCheck, Crosshair,
+  GitBranch, BarChart3, Layers,
 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -175,6 +177,11 @@ export default function GuardianShieldPage() {
   const [previewRule, setPreviewRule] = useState<StructuredRule | null>(null);
   const [policyLoading, setPolicyLoading] = useState(false);
 
+  // Decision Timeline State
+  const [timelines, setTimelines] = useState<DecisionTimeline[]>([]);
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  const [expandedCycle, setExpandedCycle] = useState<string | null>(null);
+
   const fetchPolicies = useCallback(async () => {
     try {
       const res = await fetch("/api/policies");
@@ -187,9 +194,18 @@ export default function GuardianShieldPage() {
     }
   }, []);
 
+  const fetchTimelines = useCallback(async () => {
+    try {
+      const res = await fetch("/api/timeline?limit=5");
+      const data = await res.json();
+      if (data.success) setTimelines(data.timelines || []);
+    } catch { /* silent */ }
+  }, []);
+
   useEffect(() => {
     fetchPolicies();
-  }, [fetchPolicies]);
+    fetchTimelines();
+  }, [fetchPolicies, fetchTimelines]);
 
   const handleCreatePolicy = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1101,6 +1117,153 @@ export default function GuardianShieldPage() {
                     </div>
                   )}
                 </div>
+
+                {/* AI Decision Timeline */}
+                {timelines.length > 0 && (
+                  <div className="card overflow-hidden">
+                    <button
+                      onClick={() => setTimelineOpen(!timelineOpen)}
+                      className="w-full px-5 py-4 flex items-center justify-between hover:bg-white/[0.015] transition-colors"
+                      style={{ borderBottom: timelineOpen ? "1px solid var(--border-subtle)" : undefined }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Layers className="w-4 h-4" style={{ color: "var(--accent)" }} />
+                        <span className="text-sm font-semibold text-white">AI Decision Timeline</span>
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider"
+                          style={{ background: "rgba(52,211,153,0.08)", color: "var(--green)", border: "1px solid rgba(52,211,153,0.15)" }}>
+                          {timelines.length} cycles
+                        </span>
+                      </div>
+                      {timelineOpen
+                        ? <ChevronUp className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
+                        : <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
+                    </button>
+
+                    {timelineOpen && (
+                      <div className="divide-y animate-fade-in" style={{ borderColor: "var(--border-subtle)" }}>
+                        {timelines.map((tl) => {
+                          const isExp = expandedCycle === tl.id;
+                          const card = tl.decisionCard;
+                          const actionColor = card.decision === "MONITOR" || card.decision === "NONE"
+                            ? "#22c55e"
+                            : card.decision === "ALERT"
+                              ? "#eab308"
+                              : "#ef4444";
+                          return (
+                            <div key={tl.id}>
+                              {/* Cycle header row */}
+                              <button
+                                onClick={() => setExpandedCycle(isExp ? null : tl.id)}
+                                className="w-full px-5 py-3.5 flex items-center gap-3 text-left hover:bg-white/[0.02] transition-colors"
+                              >
+                                <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+                                  style={{ background: actionColor + "12", border: "1px solid " + actionColor + "20" }}>
+                                  <BarChart3 className="w-3.5 h-3.5" style={{ color: actionColor }} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold" style={{ color: actionColor }}>
+                                      {card.decision}
+                                    </span>
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded font-mono"
+                                      style={{ background: "rgba(255,255,255,0.04)", color: "var(--text-muted)" }}>
+                                      Cycle #{tl.cycleNumber}
+                                    </span>
+                                    {tl.multiAgentEnabled && (
+                                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                                        style={{ background: "rgba(139,92,246,0.1)", color: "#a78bfa", border: "1px solid rgba(139,92,246,0.2)" }}>
+                                        Multi-Agent
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
+                                    {new Date(tl.startTimestamp).toLocaleTimeString()} · Risk {card.riskScore}/100 · {card.confidence}% conf
+                                  </div>
+                                </div>
+                                {isExp
+                                  ? <ChevronUp className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--text-muted)" }} />
+                                  : <ChevronDown className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--text-muted)" }} />}
+                              </button>
+
+                              {/* Expanded detail */}
+                              {isExp && (
+                                <div className="px-5 pb-5 pt-1 animate-fade-in space-y-4" style={{ background: "var(--bg-elevated)" }}>
+                                  {/* Decision Card */}
+                                  <div className="p-3 rounded-xl space-y-2.5" style={{ background: "var(--bg-raised)", border: "1px solid " + actionColor + "18" }}>
+                                    <div className="text-[9px] uppercase tracking-widest font-semibold" style={{ color: "var(--text-muted)" }}>Decision Card</div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      {[
+                                        { label: "Decision", val: card.decision, color: actionColor },
+                                        { label: "Confidence", val: card.confidence + "%", color: "var(--text-primary)" },
+                                        { label: "Risk Score", val: card.riskScore + " / 100", color: riskColor(card.riskScore) },
+                                        { label: "TX Status", val: card.transactionStatus, color: card.transactionStatus === "executed" ? "#22c55e" : "var(--text-muted)" },
+                                      ].map((m) => (
+                                        <div key={m.label} className="p-2 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                          <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>{m.label}</div>
+                                          <div className="text-xs font-bold mt-0.5" style={{ color: m.color }}>{m.val}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                                      Provider: <span className="text-white font-medium">{card.executionProvider}</span>
+                                    </div>
+                                    {card.triggeredPolicy && (
+                                      <div className="text-[10px] p-2 rounded-lg" style={{ background: "rgba(239,68,68,0.06)", color: "#f87171", border: "1px solid rgba(239,68,68,0.12)" }}>
+                                        <span className="font-semibold">Policy: </span>{card.triggeredPolicy.slice(0, 80)}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Agent Steps Timeline */}
+                                  <div>
+                                    <div className="text-[9px] uppercase tracking-widest font-semibold mb-2" style={{ color: "var(--text-muted)" }}>Agent Pipeline</div>
+                                    <div className="space-y-1.5">
+                                      {tl.steps.map((step, idx) => (
+                                        <div key={step.step + idx} className="flex items-start gap-2.5">
+                                          <div className="flex flex-col items-center shrink-0" style={{ width: 20 }}>
+                                            <div className="w-2 h-2 rounded-full mt-1" style={{ background: "var(--accent)", flexShrink: 0 }} />
+                                            {idx < tl.steps.length - 1 && (
+                                              <div className="w-px flex-1 mt-0.5" style={{ background: "var(--border-subtle)", minHeight: 12 }} />
+                                            )}
+                                          </div>
+                                          <div className="pb-1.5 flex-1 min-w-0">
+                                            <div className="flex items-center gap-1.5">
+                                              <span className="text-[11px] font-semibold text-white">{step.label}</span>
+                                              <span className="text-[9px] font-mono" style={{ color: "var(--text-muted)" }}>
+                                                {new Date(step.timestamp).toLocaleTimeString()}
+                                              </span>
+                                            </div>
+                                            <div className="text-[10px] leading-relaxed mt-0.5" style={{ color: "var(--text-secondary)" }}>
+                                              {step.summary}
+                                            </div>
+                                            {step.debugOutput && (
+                                              <div className="text-[9px] font-mono mt-1 px-2 py-1 rounded"
+                                                style={{ background: "rgba(255,255,255,0.03)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
+                                                {step.debugOutput.slice(0, 120)}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  {/* Reasoning Hash */}
+                                  <div className="flex items-center gap-1.5">
+                                    <GitBranch className="w-3 h-3 shrink-0" style={{ color: "var(--text-muted)" }} />
+                                    <span className="text-[9px] font-mono truncate" style={{ color: "var(--text-muted)" }}>
+                                      {tl.reasoningHash.slice(0, 32)}...
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Quick Links */}
                 <div className="grid grid-cols-2 gap-3">

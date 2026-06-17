@@ -23,6 +23,7 @@ import {
   ExecutionAgent, 
   SupervisorAgent 
 } from "./multi-agent";
+import { DecisionTimelineBuilder, DecisionTimelineStore } from "./decision-timeline";
 import * as fs from "fs";
 
 dotenv.config({ path: "../.env" });
@@ -237,6 +238,7 @@ class AegisAgent {
   private async executeCycle(): Promise<void> {
     this.cycleCount++;
     const cycleStart = Date.now();
+    const tlBuilder = new DecisionTimelineBuilder(`cycle_${this.cycleCount}_${cycleStart}`);
     
     console.log(`\n${"═".repeat(60)}`);
     console.log(`[Cycle #${this.cycleCount}] ${new Date().toISOString()}`);
@@ -249,6 +251,7 @@ class AegisAgent {
     console.log(`  24h Change: ${marketData.priceChange24h > 0 ? '+' : ''}${marketData.priceChange24h.toFixed(2)}%`);
     console.log(`  Volume: $${(marketData.volume24h / 1e6).toFixed(1)}M`);
     console.log(`  Liquidity: $${(marketData.liquidity / 1e9).toFixed(2)}B`);
+    tlBuilder.addStep("observe", "Observe", `BNB $${marketData.price.toFixed(2)}, ${marketData.priceChange24h > 0 ? '+' : ''}${marketData.priceChange24h.toFixed(2)}% 24h`, { price: marketData.price, priceChange24h: marketData.priceChange24h, volume24hM: parseFloat((marketData.volume24h / 1e6).toFixed(1)), liquidityB: parseFloat((marketData.liquidity / 1e9).toFixed(2)) });
 
     // ─── Phase 2: ANALYZE ─────────────────────────────────
     console.log("\n🧠 Phase 2: ANALYZE — Running AI risk assessment...");
@@ -260,6 +263,7 @@ class AegisAgent {
     for (const factor of riskSnapshot.factors) {
       console.log(`  → ${factor.name}: ${factor.score}/100 (w=${factor.weight}) — ${factor.description}`);
     }
+    tlBuilder.addStep("risk_agent", "Risk Agent", `Overall risk: ${riskSnapshot.overallRisk}/100 — ${["None","Low","Medium","High","Critical"][riskSnapshot.riskLevel]}`, { overallRisk: riskSnapshot.overallRisk, liquidationRisk: riskSnapshot.liquidationRisk, volatilityRisk: riskSnapshot.volatilityRisk, confidence: riskSnapshot.confidence }, riskSnapshot.reasoning);
 
     // ─── Phase 2.1: GUARDIAN POLICIES ────────────────────
     let policyTriggeredThreat: { action: SuggestedAction; reasoning: string; confidence: number } | null = null;
@@ -525,6 +529,30 @@ class AegisAgent {
         }
       }
     }
+
+    // ─── Phase 4 Timeline Steps ────────────────────────────
+    tlBuilder.addStep("decision", "Decision", `${threat.suggestedAction} — Threat: ${threat.threatDetected}`, { action: threat.suggestedAction, threatDetected: threat.threatDetected, severity: ["NONE","LOW","MEDIUM","HIGH","CRITICAL"][threat.severity], confidence: threat.confidence, riskScore: riskSnapshot.overallRisk }, threat.reasoning);
+    tlBuilder.addStep("execution", "Execution", CONFIG.dryRun ? "Dry run — no on-chain tx" : `Provider: ${process.env.TWAK_ENABLED === "true" ? "Trust Wallet Agent Kit" : "Legacy Executor"}`, { dryRun: CONFIG.dryRun, provider: process.env.TWAK_ENABLED === "true" ? "twak" : "legacy" });
+    tlBuilder.addStep("transaction", "Transaction", decisionTx ? `On-chain: ${decisionTx}` : "No transaction (dry run or monitoring only)", { txHash: decisionTx || "", status: CONFIG.dryRun ? "dry_run" : decisionTx ? "executed" : "skipped" });
+
+    // ─── Persist Timeline ─────────────────────────────────
+    const watchedAddr0 = watchedAddresses[0] || ethers.ZeroAddress;
+    const tl = tlBuilder.build(
+      this.cycleCount,
+      watchedAddr0,
+      {
+        decision: threat.suggestedAction,
+        confidence: threat.confidence,
+        riskScore: riskSnapshot.overallRisk,
+        triggeredPolicy: threat.threatDetected ? threat.reasoning.slice(0, 120) : null,
+        executionProvider: process.env.TWAK_ENABLED === "true" ? "Trust Wallet Agent Kit" : "Legacy Executor",
+        transactionStatus: CONFIG.dryRun ? "dry_run" : decisionTx ? "executed" : "skipped",
+        transactionHash: decisionTx || undefined,
+      },
+      reasoningHash,
+      process.env.ENABLE_MULTI_AGENT === "true"
+    );
+    await DecisionTimelineStore.save(tl);
 
     // ─── Cycle Summary ────────────────────────────────────
     const cycleDuration = Date.now() - cycleStart;
